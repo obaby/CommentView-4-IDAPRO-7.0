@@ -22,10 +22,6 @@ class chooser_handler_t(idaapi.action_handler_t):
         self.thing = thing
 
     def activate(self, ctx):
-        #sel = []
-        #for i in xrange(len(ctx.chooser_selection)):
-        #    sel.append(str(ctx.chooser_selection.at(i)))
-        #print "command %s selected @ %s" % (self.thing, ", ".join(sel))
         pass
 
     def update(self, ctx):
@@ -33,65 +29,53 @@ class chooser_handler_t(idaapi.action_handler_t):
 
 
 class MyChoose2(Choose2):
-
     def __init__(self, title, nb = 5, flags=0, width=None, height=None, embedded=False, modal=False):
         Choose2.__init__(
             self,
             title,
-            [ ["Address", 16], ["T", 2], ["Instruction/Data", 60], ["Comment", 100]],
+            [ ["Address", 20], ["Type", 2], ["Instruction/Data", 24], ["Comment", 36]],
             flags = flags,
             width = width,
             height = height,
             embedded = embedded)
         self.n = 0
-        self.items = self.get_all_comments() #[ self.make_item() for x in xrange(0, nb+1) ]
+        self.items = self.get_asm_comments() + self.get_f5_comments()
         self.icon = 5
         self.selcount = 0
         self.modal = modal
-        self.popup_names = [] #["Inzert", "Del leet", "Ehdeet", "Ree frech"]
-
-        #print("created %s" % str(self))
+        self.popup_names = []   # ["Insert", "Delete", "Edit", "Refresh"]
 
     def OnClose(self):
         print "closed", str(self)
 
     def OnEditLine(self, n):
         self.items[n][1] = self.items[n][1] + "*"
-        #print("editing %d" % n)
 
     def OnInsertLine(self):
         self.items.append(self.make_item())
-        #print("insert line")
 
     def OnSelectLine(self, n):
         self.selcount += 1
-
-        ea = int(self.items[n][0], 16)
+        ea = int(self.items[n][0].split(":")[1], 16)
         idc.jumpto(ea)
-        #Warning("[%02d] selectline '%s'" % (self.selcount, n))
 
     def OnGetLine(self, n):
-        #print("getline %d" % n)
         return self.items[n]
 
     def OnGetSize(self):
         n = len(self.items)
-        #print("getsize -> %d" % n)
         return n
 
     def OnDeleteLine(self, n):
-        #print("del %d " % n)
         del self.items[n]
         return n
 
     def OnRefresh(self, n):
-        #print("refresh %d" % n)
         return n
 
     def OnGetIcon(self, n):
         r = self.items[n]
         t = self.icon + r[1].count("*")
-        #print "geticon", n, t
         return t
 
     def show(self):
@@ -113,52 +97,63 @@ class MyChoose2(Choose2):
         else:
             return False
 
-    def get_all_comments(self):
+    def get_asm_comments(self):
         cmts = []
         for seg in idautils.Segments():
-            print 'Anylising:', idc.SegName(seg), hex(idc.SegStart(seg)), hex(idc.SegEnd(seg)) + '\n'
+            seg_name = idc.SegName(seg)
             ea = idc.SegStart(seg)
-            start = idc.SegStart(seg)
             end = idc.SegEnd(seg)
             while ea < end:
-
                 if ea != idc.BADADDR:
-                    cmt = idc.GetCommentEx(ea, True)
+                    cmt = idc.GetCommentEx(ea, True)    # repeatable comments
                     if cmt:
-                        if self.check_isin_filter(cmt):
-                            print " Address: ",format(ea, '#16X'),'In fliter,IGN:', cmt
-                        else:
-                            current_cmt = [format(ea, '#16X'), 'R', idc.GetDisasm(ea), cmt]
+                        if not self.check_isin_filter(cmt):
+                            current_cmt = ["%s:%-16X" % (seg_name, ea), 'R', idc.GetDisasm(ea), cmt]
                             cmts.append(current_cmt)
                             self.n += 1
-                            print " Address: ", format(ea, '#16X'), 'R', 'Comment:', cmt
 
-                    cmt2 = idc.GetCommentEx(ea, False)
+                    cmt2 = idc.GetCommentEx(ea, False)  # usual comments
                     if cmt2:
-                        if self.check_isin_filter(cmt2):
-                            print " Address: ",format(ea, '#16X'),'In fliter,IGN:', cmt2
-                        else:
-                            current_cmt = [format(ea, '#16X'), 'N', idc.GetDisasm(ea), cmt2]
+                        if not self.check_isin_filter(cmt2):
+                            current_cmt = ["%s:%-16X" % (seg_name, ea), 'N', idc.GetDisasm(ea), cmt2]
                             cmts.append(current_cmt)
                             self.n += 1
-                            print " Address: ",format(ea, '#16X'), 'N', 'Comment:', cmt2
                 ea = idc.next_head(ea, end)
         return cmts
 
+    def get_f5_comments(self):
+        cmts = []
+        for seg in idautils.Segments():
+            ea = idc.SegStart(seg)
+            if idc.GetSegmentAttr(ea, idc.SEGATTR_TYPE) != idaapi.SEG_CODE:
+                continue
+
+            seg_name = idc.SegName(seg)
+            end = idc.SegEnd(seg)
+            while ea < end:
+                if ea != idc.BADADDR and idc.GetFunctionFlags(ea) != 0xffffffff:
+                    try:
+                        cfunc = idaapi.decompile(ea)
+                        for tl, citem in cfunc.user_cmts.items():
+                            current_cmt = ["%s:%-16X" % (seg_name, tl.ea), 'F5', idc.GetDisasm(tl.ea), citem.c_str()]   # F5 comments
+                            cmts.append(current_cmt)
+                            self.n += 1
+                    except idaapi.DecompilationFailure:
+                        pass
+                    finally:
+                        ea = idc.GetFunctionAttr(ea, idc.FUNCATTR_END)
+                else:
+                    ea = idc.next_head(ea, end)
+        return cmts
 
     def OnGetLineAttr(self, n):
         pass
-        #print("getlineattr %d" % n)
-        #if n == 1:
-        #    return [0xFF0000, 0]
-
 
  # -----------------------------------------------------------------------
 def test_choose2(modal=False):
     global c
     c = MyChoose2("Comments List", nb=10, modal=modal)
     r = c.show()
-    #c.get_all_comments() # get all comments
     form = idaapi.get_current_tform()
     for thing in ["A", "B"]:
         idaapi.attach_action_to_popup(form, None, "choose2:act%s" % thing)
@@ -183,7 +178,7 @@ class show_cmts_plugin_t(idaapi.plugin_t):
     flags = idaapi.PLUGIN_UNL
     comment = "IDA Comments Viewer: generate all comments of the idb"
     help = "Bugs and report: http://www.h4ck.org.cn"
-    wanted_name = "Comments Viewer by obaby"
+    wanted_name = "Comments Viewer"
     wanted_hotkey = "Ctr-Alt-F8"
 
     def init(self):
@@ -200,16 +195,10 @@ class show_cmts_plugin_t(idaapi.plugin_t):
         ida_kernwin.show_wait_box('Analyzing comments in progress, this will take a while.')
         test_choose2(False)
         ida_kernwin.hide_wait_box('Analyzing comments in progress, this will take a while.')
-        print "Finished,have a good time"
-
-
+        print "Finished, have a good time!"
 
     def term(self):
         ida_kernwin.hide_wait_box('Analyzing comments in progress, this will take a while.')
-
-
-
-
 
 def PLUGIN_ENTRY():
     return show_cmts_plugin_t()
